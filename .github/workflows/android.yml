@@ -1,0 +1,58 @@
+
+name: Android build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract project
+        run: unzip -q PhotoWagon-Android-GitHub.zip
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build cmake
+          cargo install cargo-ndk --locked
+
+      - name: Download dependencies
+        working-directory: photowagon-main
+        run: |
+          mkdir -p submodules
+          git clone --depth 1 https://github.com/LibRaw/LibRaw.git submodules/LibRaw
+          git clone --depth 1 https://github.com/libjxl/libjxl.git submodules/libjxl
+          git -C submodules/libjxl submodule update --init --depth 1 third_party/highway third_party/brotli third_party/skcms
+
+      - name: Build Android engine
+        working-directory: photowagon-main
+        run: cargo xtask android --release --emulator
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+
+      - name: Build APK
+        run: gradle -p photowagon-main/android assembleDebug --no-daemon
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PhotoWagon-android
+          path: photowagon-main/android/app/build/outputs/apk/debug/app-debug.apk
