@@ -1,58 +1,80 @@
 
-name: Android build
+# Compila Seven Design para Android (arm64-v8a)
+name: Seven Design Android
 
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, master]
 
 permissions:
   contents: read
 
+concurrency:
+  group: seven-design-android-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
 jobs:
   build:
+    name: Build Seven Design APK
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Descargar repositorio
+        uses: actions/checkout@v7
 
-      - name: Extract project
-        run: unzip -q PhotoWagon-Android-GitHub.zip
+      - name: Leer versión
+        id: version
+        run: |
+          VERSION=$(sed -n 's/^sevendesign.version=//p' apps/sevendesign-android/android/gradle.properties)
+          if [ -z "$VERSION" ]; then
+            echo "::error::No se encontró sevendesign.version"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/setup-java@v4
+      - name: Configurar Java
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: "21"
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Configurar Rust
+        run: rustup toolchain install
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
         with:
-          targets: aarch64-linux-android,x86_64-linux-android
+          key: seven-design-android
 
-      - name: Install tools
+      - name: Instalar cargo-ndk y Android NDK
         run: |
-          sudo apt-get update
-          sudo apt-get install -y ninja-build cmake
-          cargo install cargo-ndk --locked
+          cargo install cargo-ndk --version 4.1.2 --locked
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;29.0.14206865" >/dev/null
 
-      - name: Download dependencies
-        working-directory: photowagon-main
+      - name: Compilar APK Release
+        working-directory: apps/sevendesign-android/android
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
-          mkdir -p submodules
-          git clone --depth 1 https://github.com/LibRaw/LibRaw.git submodules/LibRaw
-          git clone --depth 1 https://github.com/libjxl/libjxl.git submodules/libjxl
-          git -C submodules/libjxl submodule update --init --depth 1 third_party/highway third_party/brotli third_party/skcms
+          chmod +x gradlew
+          ./gradlew assembleRelease \
+            "-Psevendesign.abis=arm64-v8a" \
+            "-Psevendesign.version=$VERSION" \
+            -Psevendesign.unsigned=true \
+            --no-daemon
 
-      - name: Build Android engine
-        working-directory: photowagon-main
-        run: cargo xtask android --release --emulator
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          cp app/build/outputs/apk/release/app-release-unsigned.apk \
+            "$GITHUB_WORKSPACE/dist/SevenDesign-$VERSION.apk"
 
-      - uses: gradle/actions/setup-gradle@v4
+      - name: Guardar APK
+        uses: actions/upload-artifact@v7
         with:
-          gradle-version: '8.10.2'
-
-      - name: Build APK
-        run: gradle -p photowagon-main/android assembleDebug --no-daemon
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: PhotoWagon-android
-          path: photowagon-main/android/app/build/outputs/apk/debug/app-debug.apk
+          name: SevenDesign-apk
+          path: dist/*.apk
+          if-no-files-found: error
